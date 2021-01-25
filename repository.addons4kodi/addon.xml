@@ -1,16 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="repository.addons4kodi" name="Addons4Kodi Repository" version="1.3" provider-name="A4K">
+<addon id="repository.addons4kodi" name="Addons4Kodi Repository" version="1.4" provider-name="A4K">
 	<extension point="xbmc.addon.repository" name="Addons4Kodi Repository">
 		<dir>
             <info compressed="false">https://raw.githubusercontent.com/a4k-openproject/repository.addons4kodi/master/zips/addons.xml</info>
             <checksum>https://raw.githubusercontent.com/a4k-openproject/repository.addons4kodi/master/zips/addons.xml.md5</checksum>
             <datadir zip="true">https://raw.githubusercontent.com/a4k-openproject/repository.addons4kodi/master/zips/</datadir>
         </dir>
-		<dir>
-			<info compressed="false">https://raw.githubusercontent.com/a4k-openproject/repository.openmeta/master/zips/addons.xml</info>
-			<checksum>https://raw.githubusercontent.com/a4k-openproject/repository.openmeta/master/zips/addons.xml.md5</checksum>
-			<datadir zip="true">https://raw.githubusercontent.com/a4k-openproject/repository.openmeta/master/zips/</datadir>
-		</dir>
         <dir>
             <info compressed="false">https://raw.githubusercontent.com/a4k-openproject/repository.openscrapers/master/zips/addons.xml</info>
             <checksum>https://raw.githubusercontent.com/a4k-openproject/repository.openscrapers/master/zips/addons.xml.md5</checksum>
