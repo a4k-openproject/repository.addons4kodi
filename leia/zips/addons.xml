@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="repository.addons4kodi" name="Addons4Kodi Repository" version="2.0" provider-name="A4K">
+<?xml version='1.0' encoding='utf-8'?>
+<addons><addon id="repository.addons4kodi" name="Addons4Kodi Repository" version="2.0" provider-name="A4K">
 	<extension point="xbmc.addon.repository" name="Addons4Kodi Repository">
         <dir minversion="18.0" maxversion="19.9.9">
             <info compressed="false">https://raw.githubusercontent.com/a4k-openproject/repository.addons4kodi/master/zips/addons.xml</info>
@@ -37,7 +37,7 @@
 	<extension point="xbmc.addon.metadata">
 		<summary>Addons4Kodi Repository</summary>
 		<description>The official repo of /r/Addons4Kodi!.</description>
-		<disclaimer></disclaimer>
+		<disclaimer />
 		<platform>all</platform>
 	</extension>
-</addon>
+</addon></addons>

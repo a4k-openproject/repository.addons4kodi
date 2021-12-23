@@ -1,54 +1,218 @@
-""" downloaded from http://xbmc-addons.googlecode.com/svn/addons/ """
-""" This is a modded version of the original addons.xml generator """
+""" 
+    Put this script in the root folder of your repo and it will
+    zip up all addon folders, create a new zip in your zips folder
+    and then update the md5 and addons.xml file
+"""
 
-""" Put this version in the root folder of your repo and it will """
-""" zip up all add-on folders, create a new zip in your zips folder """
-""" and then update the md5 and addons.xml file """
-
-""" Recoded by whufclee (info@totalrevolution.tv) """
-
-import re
+import hashlib
 import os
 import shutil
-import hashlib
+import sys
 import zipfile
+
+from xml.etree import ElementTree
+
+SCRIPT_VERSION = 4
+KODI_VERSIONS = ["krypton", "leia", "matrix", "nexus", "repo"]
+IGNORE = [
+    ".git",
+    ".github",
+    ".gitignore",
+    ".DS_Store",
+    "thumbs.db",
+    ".idea",
+    "venv",
+]
+_COLOR_ESCAPE = "\x1b[{}m"
+_COLORS = {
+    "black": "30",
+    "red": "31",
+    "green": "4;32",
+    "yellow": "3;33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "1;36",
+    "grey": "37",
+    "endc": "0",
+}
+
+
+def _setup_colors():
+    """
+    Return True if the running system's terminal supports color,
+    and False otherwise.
+    """
+
+    def vt_codes_enabled_in_windows_registry():
+        """
+        Check the Windows registry to see if VT code handling has been enabled by default.
+        """
+        try:
+            import winreg
+        except:
+            return False
+        else:
+            reg_key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Console", access=winreg.KEY_ALL_ACCESS
+            )
+            try:
+                reg_key_value, _ = winreg.QueryValueEx(reg_key, "VirtualTerminalLevel")
+            except FileNotFoundError:
+                try:
+                    winreg.SetValueEx(
+                        reg_key, "VirtualTerminalLevel", 0, winreg.KEY_DWORD, 1
+                    )
+                except:
+                    return False
+                else:
+                    reg_key_value, _ = winreg.QueryValueEx(
+                        reg_key, "VirtualTerminalLevel"
+                    )
+            else:
+                return reg_key_value == 1
+
+    def is_a_tty():
+        return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+    def legacy_support():
+        color = 0
+        console = 0
+        if sys.platform in ["linux", "linux2"]:
+            color = os.system("color")
+        elif sys.platform == "win32":
+            from ctypes import windll
+
+            k = windll.kernel32
+            console = k.SetConsoleMode(k.GetStdHandle(-11), 7)
+        elif sys.platform == "darwin":
+            pass
+
+        return color == 1 or console == 1
+
+    return any(
+        [
+            is_a_tty(),
+            sys.platform != "win32",
+            "ANSICON" in os.environ,
+            "WT_SESSION" in os.environ,
+            os.environ.get("TERM_PROGRAM") == "vscode",
+            vt_codes_enabled_in_windows_registry(),
+            legacy_support(),
+        ]
+    )
+
+
+_SUPPORTS_COLOR = _setup_colors()
+
+
+def color_text(text, color):
+    """
+    Return an ANSI-colored string, if supported.
+    """
+
+    return (
+        '{}{}{}'.format(
+            _COLOR_ESCAPE.format(_COLORS[color]),
+            text,
+            _COLOR_ESCAPE.format(_COLORS["endc"]),
+        )
+        if _SUPPORTS_COLOR
+        else text
+    )
+
+
+def convert_bytes(num):
+    """
+    this function will convert bytes to MB.... GB... etc
+    """
+    for x in ['bytes', 'KB', 'MB', 'GB', 'TB']:
+        if num < 1024.0:
+            return "%3.1f %s" % (num, x)
+        num /= 1024.0
+
 
 class Generator:
     """
-        Generates a new addons.xml file from each addons addon.xml file
-        and a new addons.xml.md5 hash file. Must be run from the root of
-        the checked-out repo. Only handles single depth folder structure.
+    Generates a new addons.xml file from each addons addon.xml file
+    and a new addons.xml.md5 hash file. Must be run from the root of
+    the checked-out repo.
     """
-    def __init__(self):
-# Create the zips folder if it doesn't already exist
-        zips_path = ('zips')
-        if not os.path.exists(zips_path):
-            os.makedirs(zips_path)
 
-# Comment out this line if you have .pyc or .pyo files you need to keep
+    def __init__(self, release):
+        self.release_path = release
+        self.zips_path = os.path.join(self.release_path, "zips")
+        addons_xml_path = os.path.join(self.zips_path, "addons.xml")
+        md5_path = os.path.join(self.zips_path, "addons.xml.md5")
+
+        if not os.path.exists(self.zips_path):
+            os.makedirs(self.zips_path)
+
         self._remove_binaries()
 
-        self._generate_addons_file()
-        self._generate_md5_file()
-        print("Finished updating addons xml and md5 files")
+        if self._generate_addons_file(addons_xml_path):
+            print(
+                "Successfully updated {}".format(color_text(addons_xml_path, 'yellow'))
+            )
 
-    def _create_zips(self, addon_id, version):
-        xml_path = os.path.join(addon_id, 'addon.xml')
-        addon_folder = os.path.join('zips', addon_id)
-        if not os.path.exists(addon_folder):
-            os.makedirs(addon_folder)
+            if self._generate_md5_file(addons_xml_path, md5_path):
+                print("Successfully updated {}".format(color_text(md5_path, 'yellow')))
 
-        final_zip = os.path.join('zips', addon_id, '{0}-{1}.zip'.format(addon_id, version))
+    def _remove_binaries(self):
+        """
+        Removes any and all compiled Python files before operations.
+        """
+
+        for parent, dirnames, filenames in os.walk(self.release_path):
+            for fn in filenames:
+                if fn.lower().endswith("pyo") or fn.lower().endswith("pyc"):
+                    compiled = os.path.join(parent, fn)
+                    try:
+                        os.remove(compiled)
+                        print(
+                            "Removed compiled python file: {}".format(
+                                color_text(compiled, 'green')
+                            )
+                        )
+                    except:
+                        print(
+                            "Failed to remove compiled python file: {}".format(
+                                color_text(compiled, 'red')
+                            )
+                        )
+            for dir in dirnames:
+                if "pycache" in dir.lower():
+                    compiled = os.path.join(parent, dir)
+                    try:
+                        shutil.rmtree(compiled)
+                        print(
+                            "Removed __pycache__ cache folder: {}".format(
+                                color_text(compiled, 'green')
+                            )
+                        )
+                    except:
+                        print(
+                            "Failed to remove __pycache__ cache folder:  {}".format(
+                                color_text(compiled, 'red')
+                            )
+                        )
+
+    def _create_zip(self, folder, addon_id, version):
+        """
+        Creates a zip file in the zips directory for the given addon.
+        """
+        addon_folder = os.path.join(self.release_path, folder)
+        zip_folder = os.path.join(self.zips_path, addon_id)
+        if not os.path.exists(zip_folder):
+            os.makedirs(zip_folder)
+
+        final_zip = os.path.join(zip_folder, "{0}-{1}.zip".format(addon_id, version))
         if not os.path.exists(final_zip):
-            print("NEW ADD-ON - Creating zip for: {0} v.{1}".format(addon_id, version))
-            zip = zipfile.ZipFile(final_zip, 'w', compression=zipfile.ZIP_DEFLATED )
-            root_len = len(os.path.dirname(os.path.abspath(addon_id)))
-            
-            ignore = ['.git', '.github', '.gitignore', '.DS_Store', 'thumbs.db', '.idea', 'venv']
-            
-            for root, dirs, files in os.walk(addon_id):
-                # remove any unneeded git artifacts
-                for i in ignore:
+            zip = zipfile.ZipFile(final_zip, "w", compression=zipfile.ZIP_DEFLATED)
+            root_len = len(os.path.dirname(os.path.abspath(addon_folder)))
+
+            for root, dirs, files in os.walk(addon_folder):
+                # remove any unneeded artifacts
+                for i in IGNORE:
                     if i in dirs:
                         try:
                             dirs.remove(i)
@@ -60,98 +224,155 @@ class Generator:
                                 files.remove(f)
                             except:
                                 pass
-                
+
                 archive_root = os.path.abspath(root)[root_len:]
 
                 for f in files:
                     fullpath = os.path.join(root, f)
                     archive_name = os.path.join(archive_root, f)
                     zip.write(fullpath, archive_name, zipfile.ZIP_DEFLATED)
-            
+
             zip.close()
-            
-            # Copy over the icon, fanart and addon.xml to the zip directory
-            copyfiles = ['icon.png', 'fanart.jpg', 'addon.xml']
-            files = os.listdir(addon_id)
-            for file in files:
-                if file in copyfiles:
-                    shutil.copy(os.path.join(addon_id, file), addon_folder)
+            size = convert_bytes(os.path.getsize(final_zip))
+            print(
+                "Zip created for {} ({}) - {}".format(
+                    color_text(addon_id, 'cyan'),
+                    color_text(version, 'green'),
+                    color_text(size, 'yellow'),
+                )
+            )
 
-# Remove any instances of pyc or pyo files
-    def _remove_binaries(self):
-        for parent, dirnames, filenames in os.walk('.'):
-            for fn in filenames:
-                if fn.lower().endswith('pyo') or fn.lower().endswith('pyc'):
-                    compiled = os.path.join(parent, fn)
-                    py_file = compiled.replace('.pyo', '.py').replace('.pyc', '.py')
-                    if os.path.exists(py_file):
-                        try:
-                            os.remove(compiled)
-                            print("Removed compiled python file:")
-                            print(compiled)
-                            print('-----------------------------')
-                        except:
-                            print("Failed to remove compiled python file:")
-                            print(compiled)
-                            print('-----------------------------')
-                    else:
-                        print("Compiled python file found but no matching .py file exists:")
-                        print(compiled)
-                        print('-----------------------------')
+    def _copy_meta_files(self, addon_id, addon_folder):
+        """
+        Copy the addon.xml and relevant art files into the relevant folders in the repository.
+        """
 
-    def _generate_addons_file(self):
-        # addon list
-        addons = os.listdir('.')
+        tree = ElementTree.parse(os.path.join(self.release_path, addon_id, "addon.xml"))
+        root = tree.getroot()
 
-        # final addons text
-        addons_xml = u"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<addons>\n"
-
-        # loop thru and add each addons addon.xml file
-        for addon in addons:
-            try:
-                if not os.path.isdir(addon) or addon == "zips" or addon.startswith('.'):
+        copyfiles = ["addon.xml"]
+        for ext in root.findall("extension"):
+            if ext.get("point") in ["xbmc.addon.metadata", "kodi.addon.metadata"]:
+                assets = ext.find("assets")
+                if not assets:
                     continue
-                _path = os.path.join(addon, "addon.xml")
-                xml_lines = open(_path, "r", encoding='utf-8').read().splitlines()
-                addon_xml = ""
+                for art in [a for a in assets if a.text]:
+                    copyfiles.append(os.path.normpath(art.text))
 
-                # loop thru cleaning each line
-                ver_found = False
-                for line in xml_lines:
-                    if line.find( "<?xml" ) >= 0:
-                        continue
-                    if 'version="' in line and not ver_found:
-                        version = re.compile('version="(.+?)"').findall(line)[0]
-                        ver_found = True
-                    addon_xml += line.rstrip() + "\n"
-                addons_xml += addon_xml.rstrip() + "\n\n"
+        src_folder = os.path.join(self.release_path, addon_id)
+        for file in copyfiles:
+            addon_path = os.path.join(src_folder, file)
+            if not os.path.exists(addon_path):
+                continue
 
-                # Create the zip files                
-                self._create_zips(addon, version)
+            zips_path = os.path.join(addon_folder, file)
+            asset_path = os.path.split(zips_path)[0]
+            if not os.path.exists(asset_path):
+                os.makedirs(asset_path)
 
+            shutil.copy(addon_path, zips_path)
+
+    def _generate_addons_file(self, addons_xml_path):
+        """
+        Generates a zip for each found addon, and updates the addons.xml file accordingly.
+        """
+        if not os.path.exists(addons_xml_path):
+            addons_root = ElementTree.Element('addons')
+            addons_xml = ElementTree.ElementTree(addons_root)
+        else:
+            addons_xml = ElementTree.parse(addons_xml_path)
+            addons_root = addons_xml.getroot()
+
+        folders = [
+            i
+            for i in os.listdir(self.release_path)
+            if os.path.isdir(os.path.join(self.release_path, i))
+            and i != "zips"
+            and not i.startswith(".")
+            and os.path.exists(os.path.join(self.release_path, i, "addon.xml"))
+        ]
+
+        addon_xpath = "addon[@id='{}']"
+        changed = False
+        for addon in folders:
+            try:
+                addon_xml_path = os.path.join(self.release_path, addon, "addon.xml")
+                addon_xml = ElementTree.parse(addon_xml_path)
+                addon_root = addon_xml.getroot()
+                id = addon_root.get('id')
+                version = addon_root.get('version')
+
+                updated = False
+                addon_entry = addons_root.find(addon_xpath.format(id))
+                if addon_entry is not None and addon_entry.get('version') != version:
+                    index = addons_root.findall('addon').index(addon_entry)
+                    addons_root.remove(addon_entry)
+                    addons_root.insert(index, addon_root)
+                    updated = True
+                    changed = True
+                elif addon_entry is None:
+                    addons_root.append(addon_root)
+                    updated = True
+                    changed = True
+
+                if updated:
+                    # Create the zip files
+                    self._create_zip(addon, id, version)
+                    self._copy_meta_files(addon, os.path.join(self.zips_path, id))
             except Exception as e:
-                print("Excluding {0} for {1}".format(_path, e))
+                print(
+                    "Excluding {}: {}".format(
+                        color_text(id, 'yellow'), color_text(e, 'red')
+                    )
+                )
 
-        # clean and add closing tag
-        addons_xml = addons_xml.strip() + u"\n</addons>\n"
-        self._save_file(addons_xml.encode('utf-8'), file=os.path.join('zips', 'addons.xml'), decode=True)
+        if changed:
+            addons_root[:] = sorted(addons_root, key=lambda addon: addon.get('id'))
+            try:
+                addons_xml.write(
+                    addons_xml_path, encoding="utf-8", xml_declaration=True
+                )
 
-    def _generate_md5_file(self):
+                return changed
+            except Exception as e:
+                print(
+                    "An error occurred updating {}!\n{}".format(
+                        color_text(addons_xml_path, 'yellow'), color_text(e, 'red')
+                    )
+                )
+
+    def _generate_md5_file(self, addons_xml_path, md5_path):
+        """
+        Generates a new addons.xml.md5 file.
+        """
         try:
-            m = hashlib.md5(open(os.path.join('zips', 'addons.xml'), 'r', encoding='utf-8').read().encode('utf-8')).hexdigest()
-            self._save_file(m, file=os.path.join('zips', 'addons.xml.md5'))
-        except Exception as e:
-            print("An error occurred creating addons.xml.md5 file!\n{0}".format(e))
+            m = hashlib.md5(
+                open(addons_xml_path, "r", encoding="utf-8").read().encode("utf-8")
+            ).hexdigest()
+            self._save_file(m, file=md5_path)
 
-    def _save_file(self, data, file, decode=False):
-        try:
-            if decode:
-                open(file, 'w', encoding='utf-8').write(data.decode('utf-8'))
-            else:
-                open(file, 'w').write(data)
+            return True
         except Exception as e:
-            print("An error occurred saving {0} file!\n{1}".format(file, e))
+            print(
+                "An error occurred updating {}!\n{}".format(
+                    color_text(md5_path, 'yellow'), color_text(e, 'red')
+                )
+            )
+
+    def _save_file(self, data, file):
+        """
+        Saves a file.
+        """
+        try:
+            open(file, "w").write(data)
+        except Exception as e:
+            print(
+                "An error occurred saving {}!\n{}".format(
+                    color_text(file, 'yellow'), color_text(e, 'red')
+                )
+            )
 
 
 if __name__ == "__main__":
-    Generator()
+    for release in [r for r in KODI_VERSIONS if os.path.exists(r)]:
+        Generator(release)
